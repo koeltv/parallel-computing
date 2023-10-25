@@ -210,7 +210,7 @@ init(
     // Allocate enough space for each device
     devices = (cl_device_id*)malloc(numDevices*sizeof(cl_device_id));
 
-    // Fill in the devices 
+    // Fill in the devices
     status = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_ALL,numDevices, devices, NULL);
     check(status, "clGetDeviceIDs fill-in");
 
