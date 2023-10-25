@@ -35,12 +35,8 @@ const coord_t neighbour_offsets[8] = {
 // Uses clamp-to-edge out-of-bounds handling
 size_t
 idx(size_t x, size_t y, size_t width, size_t height, int xoff, int yoff) {
-    size_t resx = x;
-    if ((xoff > 0 && x < width - xoff) || (xoff < 0 && x >= (-xoff)))
-        resx += xoff;
-    size_t resy = y;
-    if ((yoff > 0 && y < height - yoff) || (yoff < 0 && y >= (-yoff)))
-        resy += yoff;
+    size_t resx = ((xoff > 0 && x < width - xoff) || (xoff < 0 && x >= -xoff)) ? x + xoff : x;
+    size_t resy = ((yoff > 0 && y < height - yoff) || (yoff < 0 && y >= -yoff)) ? y + yoff : y;
     return resy * width + resx;
 }
 
@@ -115,30 +111,18 @@ nonMaxSuppression(
         for (size_t x = 0; x < width; x++) {
             size_t gid = y * width + x;
 
-            uint8_t sobel_angle = phase[gid];
+            uint8_t sobel_angle = phase[gid] % 128;
 
-            if (sobel_angle > 127) {
-                sobel_angle -= 128;
-            }
+            uint8_t sobel_orientation =
+                    (sobel_angle < 16 || sobel_angle >= 112) * 2
+                    + (sobel_angle >= 16 && sobel_angle < 48) * 1
+                    + (sobel_angle > 80 && sobel_angle < 112) * 3;
 
-            int sobel_orientation = 0;
-
-            if (sobel_angle < 16 || sobel_angle >= (7 * 16)) {
-                sobel_orientation = 2;
-            } else if (sobel_angle >= 16 && sobel_angle < 16 * 3) {
-                sobel_orientation = 1;
-            } else if (sobel_angle >= 16 * 3 && sobel_angle < 16 * 5) {
-                sobel_orientation = 0;
-            } else if (sobel_angle > 16 * 5 && sobel_angle <= 16 * 7) {
-                sobel_orientation = 3;
-            }
-
-            uint16_t sobel_magnitude = magnitude[gid];
             /* Non-maximum suppression
              * Pick out the two neighbours that are perpendicular to the
              * current edge pixel */
-            uint16_t neighbour_max = 0;
-            uint16_t neighbour_max2 = 0;
+            uint16_t neighbour_max;
+            uint16_t neighbour_max2;
             switch (sobel_orientation) {
                 case 0:
                     neighbour_max =
@@ -166,18 +150,18 @@ nonMaxSuppression(
                         magnitude[idx(x, y, width, height, -1, 1)];
                     break;
             }
+
+            uint16_t sobel_magnitude = magnitude[gid];
+
             // Suppress the pixel here
-            if ((sobel_magnitude < neighbour_max) ||
-                (sobel_magnitude < neighbour_max2)) {
-                sobel_magnitude = 0;
-            }
+            sobel_magnitude *= !(sobel_magnitude < neighbour_max || sobel_magnitude < neighbour_max2);
 
             /* Double thresholding */
-            // Marks YES pixels with 255, NO pixels with 0 and MAYBE pixels
-            // with 127
-            uint8_t t = 127;
-            if (sobel_magnitude > threshold_upper) t = 255;
-            if (sobel_magnitude <= threshold_lower) t = 0;
+            // Marks YES pixels with 255, NO pixels with 0 and MAYBE pixels with 127
+            uint8_t t = (sobel_magnitude > threshold_upper) * 255
+                    + (sobel_magnitude <= threshold_lower) * 0
+                    + (sobel_magnitude > threshold_lower && sobel_magnitude <= threshold_upper) * 127;
+
             out[gid] = t;
         }
     }
@@ -227,9 +211,9 @@ edgeTracing(uint8_t *restrict image, size_t width, size_t height) {
             // and y on their own, since the pixel might be added to the stack
             // in the end.
             if (neighbour.x < 0) neighbour.x = 0;
-            if (neighbour.x >= width) neighbour.x = width - 1;
+            else if (neighbour.x >= width) neighbour.x = width - 1;
             if (neighbour.y < 0) neighbour.y = 0;
-            if (neighbour.y >= height) neighbour.y = height - 1;
+            else if (neighbour.y >= height) neighbour.y = height - 1;
 
             // Only MAYBE neighbours are potential edges
             if (image[neighbour.y * width + neighbour.x] == 127) {
@@ -249,9 +233,7 @@ edgeTracing(uint8_t *restrict image, size_t width, size_t height) {
     for (int y = 0; y < height; y++) {
         // LOOP 4.6
         for (int x = 0; x < width; x++) {
-            if (image[y * width + x] == 127) {
-                image[y * width + x] = 0;
-            }
+            image[y * width + x] = 255 * (image[y * width + x] == 255);
         }
     }
 }
