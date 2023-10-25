@@ -12,6 +12,10 @@ most optimizations, no vectorization
 ```bash
 gcc -o canny util.c canny.c -lm -O2
 ```
+Also vectorize
+```bash
+gcc -o canny util.c canny.c -lm -O2 -ftree-vectorize -mavx2
+```
 Also vectorize and show what loops get vectorized
 ```bash
 gcc -o canny util.c canny.c -lm -O2 -ftree-vectorize -mavx2 -fopt-info-vec
@@ -20,6 +24,11 @@ Also allow math relaxations
 ```bash
 gcc -o canny util.c canny.c -lm -O2 -ftree-vectorize -mavx2 -fopt-info-vec -ffast-math
 ```
+Fastest tested combination
+```bash
+gcc -o canny util.c canny.c -lm -O2 -faggressive-loop-optimizations -fexpensive-optimizations -floop-nest-optimize -fselective-scheduling -fsplit-loops -ftree-loop-distribution -ftree-loop-vectorize -ffast-math
+```
+
 Also support OpenMP
 ```bash
 gcc -o canny util.c canny.c -lm -O2 -ftree-vectorize -mavx2 -fopt-info-vec -ffast-math -fopenmp
@@ -43,7 +52,7 @@ view small images accurately.)
 ```
 To run benchmarking with the large hameenkatu.pgm image
 ```bash
-./canny -B 6
+./canny -B 10
 ```
 To run benchmarking with the small x.pgm image
 ```bash
