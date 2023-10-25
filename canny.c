@@ -45,8 +45,10 @@ sobel3x3(
     const uint8_t *restrict in, size_t width, size_t height,
     int16_t *restrict output_x, int16_t *restrict output_y) {
     // LOOP 1.1
+    #pragma omp parallel for
     for (size_t y = 0; y < height; y++) {
         // LOOP 1.2
+        #pragma omp parallel for
         for (size_t x = 0; x < width; x++) {
             size_t gid = y * width + x;
 
@@ -75,8 +77,10 @@ phaseAndMagnitude(
     size_t height, uint8_t *restrict phase_out,
     uint16_t *restrict magnitude_out) {
     // LOOP 2.1
+    #pragma omp parallel for
     for (size_t y = 0; y < height; y++) {
         // LOOP 2.2
+        #pragma omp parallel for
         for (size_t x = 0; x < width; x++) {
             size_t gid = y * width + x;
 
@@ -106,8 +110,10 @@ nonMaxSuppression(
     size_t width, size_t height, int16_t threshold_lower,
     uint16_t threshold_upper, uint8_t *restrict out) {
     // LOOP 3.1
+    #pragma omp parallel for
     for (size_t y = 0; y < height; y++) {
         // LOOP 3.2
+        #pragma omp parallel for
         for (size_t x = 0; x < width; x++) {
             size_t gid = y * width + x;
 
@@ -183,14 +189,19 @@ edgeTracing(uint8_t *restrict image, size_t width, size_t height) {
     coord_t *tracing_stack_pointer = tracing_stack;
 
     // LOOP 4.1
+    #pragma omp parallel for
     for (uint16_t y = 0; y < height; y++) {
         // LOOP 4.2
+        #pragma omp parallel for
         for (uint16_t x = 0; x < width; x++) {
             // Collect all YES pixels into the stack
             if (image[y * width + x] == 255) {
                 coord_t yes_pixel = {x, y};
-                *tracing_stack_pointer = yes_pixel;
-                tracing_stack_pointer++;  // increments by sizeof(coord_t)
+                #pragma omp critical
+                {
+                    *tracing_stack_pointer = yes_pixel;
+                    tracing_stack_pointer++;  // increments by sizeof(coord_t)
+                }
             }
         }
     }
@@ -230,8 +241,10 @@ edgeTracing(uint8_t *restrict image, size_t width, size_t height) {
     // Clear all remaining MAYBE pixels to NO, these were not reachable from
     // any YES pixels
     // LOOP 4.5
+    #pragma omp parallel for
     for (int y = 0; y < height; y++) {
         // LOOP 4.6
+        #pragma omp parallel for simd
         for (int x = 0; x < width; x++) {
             image[y * width + x] = 255 * (image[y * width + x] == 255);
         }
