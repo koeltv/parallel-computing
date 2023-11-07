@@ -6,13 +6,15 @@ VERSION 23.0 - Created
 */
 
 #include <assert.h>
-#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include <CL/cl.h>
+
 #include "util.h"
+#include "opencl_util.h"
 
 // Is used to find out frame times
 int previousFinishTime = 0;
@@ -30,146 +32,22 @@ const coord_t neighbour_offsets[8] = {
 };
 
 // ## You may add your own variables here ##
+cl_context context;
+cl_command_queue cmdQueue;
+cl_platform_id *platforms;
+cl_device_id *devices;
 
-// Utility function to convert 2d index with offset to linear index
-// Uses clamp-to-edge out-of-bounds handling
-size_t
-idx(size_t x, size_t y, size_t width, size_t height, int xoff, int yoff) {
-    size_t resx = ((xoff > 0 && x < width - xoff) || (xoff < 0 && x >= -xoff)) ? x + xoff : x;
-    size_t resy = ((yoff > 0 && y < height - yoff) || (yoff < 0 && y >= -yoff)) ? y + yoff : y;
-    return resy * width + resx;
-}
+cl_mem inputBuffer, outputBufferX, outputBufferY, phaseBuffer, magnitudeBuffer, outputBuffer;
 
+cl_kernel sobelKernel, phaseAndMagnitudeKernel, nonMaxSuppressionKernel;
+cl_program program, phaseAndMagnitudeProgram, nonMaxSuppressionProgram;
+
+// Print and exit if the status code is not the success status code
 void
-sobel3x3(
-    const uint8_t *restrict in, size_t width, size_t height,
-    int16_t *restrict output_x, int16_t *restrict output_y) {
-    // LOOP 1.1
-    #pragma omp parallel for
-    for (size_t y = 0; y < height; y++) {
-        // LOOP 1.2
-        #pragma omp parallel for
-        for (size_t x = 0; x < width; x++) {
-            size_t gid = y * width + x;
-
-            /* 3x3 sobel filter, first in x direction */
-            output_x[gid] = (-1) * in[idx(x, y, width, height, -1, -1)] +
-                            1 * in[idx(x, y, width, height, 1, -1)] +
-                            (-2) * in[idx(x, y, width, height, -1, 0)] +
-                            2 * in[idx(x, y, width, height, 1, 0)] +
-                            (-1) * in[idx(x, y, width, height, -1, 1)] +
-                            1 * in[idx(x, y, width, height, 1, 1)];
-
-            /* 3x3 sobel filter, in y direction */
-            output_y[gid] = (-1) * in[idx(x, y, width, height, -1, -1)] +
-                            1 * in[idx(x, y, width, height, -1, 1)] +
-                            (-2) * in[idx(x, y, width, height, 0, -1)] +
-                            2 * in[idx(x, y, width, height, 0, 1)] +
-                            (-1) * in[idx(x, y, width, height, 1, -1)] +
-                            1 * in[idx(x, y, width, height, 1, 1)];
-        }
-    }
-}
-
-void
-phaseAndMagnitude(
-    const int16_t *restrict in_x, const int16_t *restrict in_y, size_t width,
-    size_t height, uint8_t *restrict phase_out,
-    uint16_t *restrict magnitude_out) {
-    // LOOP 2.1
-    #pragma omp parallel for
-    for (size_t y = 0; y < height; y++) {
-        // LOOP 2.2
-        #pragma omp parallel for
-        for (size_t x = 0; x < width; x++) {
-            size_t gid = y * width + x;
-
-            // Output in range -PI:PI
-            float angle = atan2f(in_y[gid], in_x[gid]);
-
-            // Shift range -1:1
-            angle /= PI;
-
-            // Shift range -127.5:127.5
-            angle *= 127.5;
-
-            // Shift range 0.5:255.5
-            angle += (127.5 + 0.5);
-
-            // Downcasting truncates angle to range 0:255
-            phase_out[gid] = (uint8_t)angle;
-
-            magnitude_out[gid] = abs(in_x[gid]) + abs(in_y[gid]);
-        }
-    }
-}
-
-void
-nonMaxSuppression(
-    const uint16_t *restrict magnitude, const uint8_t *restrict phase,
-    size_t width, size_t height, int16_t threshold_lower,
-    uint16_t threshold_upper, uint8_t *restrict out) {
-    // LOOP 3.1
-    #pragma omp parallel for
-    for (size_t y = 0; y < height; y++) {
-        // LOOP 3.2
-        #pragma omp parallel for
-        for (size_t x = 0; x < width; x++) {
-            size_t gid = y * width + x;
-
-            uint8_t sobel_angle = phase[gid] % 128;
-
-            uint8_t sobel_orientation =
-                    (sobel_angle < 16 || sobel_angle >= 112) * 2
-                    + (sobel_angle >= 16 && sobel_angle < 48) * 1
-                    + (sobel_angle > 80 && sobel_angle < 112) * 3;
-
-            /* Non-maximum suppression
-             * Pick out the two neighbours that are perpendicular to the
-             * current edge pixel */
-            uint16_t neighbour_max;
-            uint16_t neighbour_max2;
-            switch (sobel_orientation) {
-                case 0:
-                    neighbour_max =
-                        magnitude[idx(x, y, width, height, 0, -1)];
-                    neighbour_max2 =
-                        magnitude[idx(x, y, width, height, 0, 1)];
-                    break;
-                case 1:
-                    neighbour_max =
-                        magnitude[idx(x, y, width, height, -1, -1)];
-                    neighbour_max2 =
-                        magnitude[idx(x, y, width, height, 1, 1)];
-                    break;
-                case 2:
-                    neighbour_max =
-                        magnitude[idx(x, y, width, height, -1, 0)];
-                    neighbour_max2 =
-                        magnitude[idx(x, y, width, height, 1, 0)];
-                    break;
-                case 3:
-                default:
-                    neighbour_max =
-                        magnitude[idx(x, y, width, height, 1, -1)];
-                    neighbour_max2 =
-                        magnitude[idx(x, y, width, height, -1, 1)];
-                    break;
-            }
-
-            uint16_t sobel_magnitude = magnitude[gid];
-
-            // Suppress the pixel here
-            sobel_magnitude *= !(sobel_magnitude < neighbour_max || sobel_magnitude < neighbour_max2);
-
-            /* Double thresholding */
-            // Marks YES pixels with 255, NO pixels with 0 and MAYBE pixels with 127
-            uint8_t t = (sobel_magnitude > threshold_upper) * 255
-                    + (sobel_magnitude <= threshold_lower) * 0
-                    + (sobel_magnitude > threshold_lower && sobel_magnitude <= threshold_upper) * 127;
-
-            out[gid] = t;
-        }
+check(cl_int status, const char* cmd) {
+    if(status != CL_SUCCESS) {
+        printf("%s failed (%s)\n", cmd, clErrorString(status));
+        exit(-1);
     }
 }
 
@@ -258,56 +136,220 @@ cannyEdgeDetection(
     uint8_t *restrict output, double *restrict runtimes) {
     size_t image_size = width * height;
 
-    // Allocate arrays for intermediate results
-    int16_t *sobel_x = malloc(image_size * sizeof(int16_t));
-    assert(sobel_x);
+    size_t globalWorkSize[2] = {height, width};
 
-    int16_t *sobel_y = malloc(image_size * sizeof(int16_t));
-    assert(sobel_y);
+    // Used to check the output of each API call
+    cl_int status;
 
-    uint8_t *phase = malloc(image_size * sizeof(uint8_t));
-    assert(phase);
+    // Used to time specific events
+    cl_event sobelEvent, phaseAndMagnitudeEvent, nonMaxSuppressionEvent, readEvent, writeEvent;
 
-    uint16_t *magnitude = malloc(image_size * sizeof(uint16_t));
-    assert(magnitude);
+    // Write input array input to the device buffer inputBuffer
+    status = clEnqueueWriteBuffer(cmdQueue, inputBuffer, CL_FALSE, 0, sizeof(uint8_t)*image_size, input, 0, NULL, &writeEvent);
+    check(status, "clEnqueueWriteBuffer");
 
-    uint64_t times[5];
     // Canny edge detection algorithm consists of the following functions:
-    times[0] = gettimemono_ns();
-    sobel3x3(input, width, height, sobel_x, sobel_y);
 
-    times[1] = gettimemono_ns();
-    phaseAndMagnitude(sobel_x, sobel_y, width, height, phase, magnitude);
+    status = clEnqueueNDRangeKernel(cmdQueue, sobelKernel, 2, NULL, globalWorkSize, NULL, 0, NULL, &sobelEvent);
+    check(status, "clEnqueueNDRangeKernel sobelKernel");
 
-    times[2] = gettimemono_ns();
-    nonMaxSuppression(
-        magnitude, phase, width, height, threshold_lower, threshold_upper,
-        output);
+    status = clEnqueueNDRangeKernel(cmdQueue, phaseAndMagnitudeKernel, 2, NULL, globalWorkSize, NULL, 0, NULL, &phaseAndMagnitudeEvent);
+    check(status, "clEnqueueNDRangeKernel phaseAndMagnitudeKernel");
 
-    times[3] = gettimemono_ns();
-    edgeTracing(output, width, height);  // modifies output in-place
+    status = clEnqueueNDRangeKernel(cmdQueue, nonMaxSuppressionKernel, 2, NULL, globalWorkSize, NULL, 0, NULL, &nonMaxSuppressionEvent);
+    check(status, "clEnqueueNDRangeKernel nonMaxSuppressionKernel");
 
-    times[4] = gettimemono_ns();
-    // Release intermediate arrays
-    free(sobel_x);
-    free(sobel_y);
-    free(phase);
-    free(magnitude);
+    // Read the device output buffer to the host output array
+    status = clEnqueueReadBuffer(cmdQueue, outputBuffer, CL_TRUE, 0, sizeof(uint8_t)*image_size, output, 0, NULL, &readEvent);
+    check(status, "clEnqueueReadBuffer");
 
-    for (int i = 0; i < 4; i++) {
-        runtimes[i] = times[i + 1] - times[i];
-        runtimes[i] /= 1000000.0;  // Convert ns to ms
-    }
+    uint64_t startingTime = gettimemono_ns();
+    edgeTracing(output, width, height); // modifies output in-place
+    uint64_t endTime = gettimemono_ns();
+
+    // Gather run times
+
+    printf("Write time: %f ms\n", (double) getStartEndTime(writeEvent) / 1000000.0);
+    printf("Read time: %f ms\n", (double) getStartEndTime(readEvent) / 1000000.0);
+
+    runtimes[0] = (double) getStartEndTime(sobelEvent);
+    runtimes[1] = (double) getStartEndTime(phaseAndMagnitudeEvent);
+    runtimes[2] = (double) getStartEndTime(nonMaxSuppressionEvent);
+    runtimes[3] = (double) (endTime - startingTime);
+
+    for (int i = 0; i < 4; ++i) runtimes[i] /= 1000000.0; // Convert ns to ms
 }
 
 // Needed only in Part 2 for OpenCL initialization
 void
 init(
     size_t width, size_t height, uint16_t threshold_lower,
-    uint16_t threshold_upper) {}
+    uint16_t threshold_upper) {
+    size_t image_size = width * height;
+
+    // Used to check the output of each API call
+    cl_int status;
+
+    // Retrieve the number of platforms
+    cl_uint numPlatforms = 0;
+    status = clGetPlatformIDs(0, NULL, &numPlatforms);
+    check(status, "clGetPlatformIDs retrieve");
+
+    // Allocate enough space for each platform
+    platforms = (cl_platform_id*)malloc(numPlatforms*sizeof(cl_platform_id));
+
+    // Fill in the platforms
+    status = clGetPlatformIDs(numPlatforms, platforms, NULL);
+    check(status, "clGetPlatformIDs fill-in");
+
+    // Retrieve the number of devices
+    cl_uint numDevices = 0;
+    status = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_ALL, 0,NULL, &numDevices);
+    check(status, "clGetDeviceIDs retrieve");
+
+    // Allocate enough space for each device
+    devices = (cl_device_id*)malloc(numDevices*sizeof(cl_device_id));
+
+    // Fill in the devices 
+    status = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_ALL,numDevices, devices, NULL);
+    check(status, "clGetDeviceIDs fill-in");
+
+    // Create a context and associate it with the devices
+    context = clCreateContext(NULL, numDevices, devices, NULL,NULL, &status);
+    check(status, "clCreateContext");
+
+    // Create a command queue and associate it with the device
+    cl_queue_properties properties[] = {CL_QUEUE_PROPERTIES, CL_QUEUE_PROFILING_ENABLE, 0};
+    cmdQueue = clCreateCommandQueueWithProperties(context, devices[0], properties, &status);
+    check(status, "clCreateCommandQueueWithProperties");
+
+    ////////////////////////
+    // Buffers setup
+    ////////////////////////
+
+    // Create a buffer object that will contain the data from the host array input
+    inputBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, sizeof(uint8_t)*image_size, NULL, &status);
+    check(status, "clCreateBuffer inputBuffer");
+
+    // Create a buffer object that will hold the sobel3x3 x-axis output
+    outputBufferX = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(int16_t)*image_size, NULL, &status);
+    check(status, "clCreateBuffer outputBufferX");
+
+    // Create a buffer object that will hold the sobel3x3 y-axis output
+    outputBufferY = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(int16_t)*image_size, NULL, &status);
+    check(status, "clCreateBuffer outputBufferY");
+
+    // Create a buffer object that will hold the phase output data
+    phaseBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(uint8_t)*image_size, NULL, &status);
+    check(status, "clCreateBuffer phaseBuffer");
+
+    // Create a buffer object that will hold the magnitude output data
+    magnitudeBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(uint16_t)*image_size, NULL, &status);
+    check(status, "clCreateBuffer magnitudeBuffer");
+
+    // Create a buffer object that will hold the output data
+    outputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(uint8_t)*image_size, NULL, &status);
+    check(status, "clCreateBuffer outputBuffer");
+
+    ////////////////////////
+    // Program compiling
+    ////////////////////////
+
+    // Create a Program from source code
+    const char *programSource = read_source("canny.cl");
+    program = clCreateProgramWithSource(context, 1, (const char**)&programSource, NULL, &status);
+    check(status, "clCreateProgramWithSource");
+
+    // Build (compile) the Program for the device
+    status = clBuildProgram(program, numDevices, devices, NULL, NULL, NULL);
+    check(status, "clBuildProgram program");
+
+    ////////////////////////
+    // Sobel3x3 setup
+    ////////////////////////
+
+    // Create the Kernel
+    sobelKernel = clCreateKernel(program, "sobel3x3", &status);
+    check(status, "clCreateKernel sobelKernel");
+
+    // Associate the buffers and arguments with the Kernel
+    status = clSetKernelArg(sobelKernel, 0, sizeof(cl_mem), &inputBuffer);
+    status |= clSetKernelArg(sobelKernel, 1, sizeof(cl_mem), &outputBufferX);
+    status |= clSetKernelArg(sobelKernel, 2, sizeof(cl_mem), &outputBufferY);
+    status |= clSetKernelArg(sobelKernel, 3, sizeof(size_t), &width);
+    status |= clSetKernelArg(sobelKernel, 4, sizeof(size_t), &height);
+    check(status, "clSetKernelArg sobelKernel");
+
+    ////////////////////////
+    // phaseAndMagnitude setup
+    ////////////////////////
+
+    // Create the Kernel
+    phaseAndMagnitudeKernel = clCreateKernel(program, "phaseAndMagnitude", &status);
+    check(status, "clCreateKernel phaseAndMagnitudeKernel");
+
+    // Associate the buffers and arguments with the Kernel
+    status = clSetKernelArg(phaseAndMagnitudeKernel, 0, sizeof(cl_mem), &outputBufferX);
+    status |= clSetKernelArg(phaseAndMagnitudeKernel, 1, sizeof(cl_mem), &outputBufferY);
+    status |= clSetKernelArg(phaseAndMagnitudeKernel, 2, sizeof(cl_mem), &phaseBuffer);
+    status |= clSetKernelArg(phaseAndMagnitudeKernel, 3, sizeof(cl_mem), &magnitudeBuffer);
+    status |= clSetKernelArg(phaseAndMagnitudeKernel, 4, sizeof(size_t), &width);
+    status |= clSetKernelArg(phaseAndMagnitudeKernel, 5, sizeof(size_t), &height);
+    check(status, "clSetKernelArg phaseAndMagnitudeKernel");
+
+    ////////////////////////
+    // nonMaxSuppression setup
+    ////////////////////////
+
+    // Create the Kernel
+    nonMaxSuppressionKernel = clCreateKernel(program, "nonMaxSuppression", &status);
+    check(status, "clCreateKernel nonMaxSuppressionKernel");
+
+    // Associate the buffers and arguments with the Kernel
+    status = clSetKernelArg(nonMaxSuppressionKernel, 0, sizeof(cl_mem), &magnitudeBuffer);
+    status |= clSetKernelArg(nonMaxSuppressionKernel, 1, sizeof(cl_mem), &phaseBuffer);
+    status |= clSetKernelArg(nonMaxSuppressionKernel, 2, sizeof(size_t), &width);
+    status |= clSetKernelArg(nonMaxSuppressionKernel, 3, sizeof(size_t), &height);
+    status |= clSetKernelArg(nonMaxSuppressionKernel, 4, sizeof(uint16_t), &threshold_lower);
+    status |= clSetKernelArg(nonMaxSuppressionKernel, 5, sizeof(uint16_t), &threshold_upper);
+    status |= clSetKernelArg(nonMaxSuppressionKernel, 6, sizeof(cl_mem), &outputBuffer);
+    check(status, "clSetKernelArg nonMaxSuppressionKernel");
+}
 
 void
-destroy() {}
+destroy() {
+    ////////////////////////
+    // Free OpenCL resources
+    ////////////////////////
+
+    clReleaseContext(context);
+    clReleaseCommandQueue(cmdQueue);
+
+    // sobel3x3 resources
+    clReleaseKernel(sobelKernel);
+    clReleaseProgram(program);
+    clReleaseMemObject(inputBuffer);
+    clReleaseMemObject(outputBufferX);
+    clReleaseMemObject(outputBufferY);
+
+    // phaseAndMagnitude resources
+    clReleaseKernel(phaseAndMagnitudeKernel);
+    clReleaseProgram(phaseAndMagnitudeProgram);
+    clReleaseMemObject(magnitudeBuffer);
+    clReleaseMemObject(phaseBuffer);
+
+    // nonMaxSuppression resources
+    clReleaseKernel(nonMaxSuppressionKernel);
+    clReleaseProgram(nonMaxSuppressionProgram);
+    clReleaseMemObject(outputBuffer);
+
+    ////////////////////////
+    // Free host resources
+    ////////////////////////
+
+    free(platforms);
+    free(devices);
+}
 
 ////////////////////////////////////////////////
 // ¤¤ DO NOT EDIT ANYTHING AFTER THIS LINE ¤¤ //

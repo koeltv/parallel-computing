@@ -11,3 +11,5 @@ add_executable(CannyCodefiles
         opencl_util.h
         util.c
         util.h)
+
+include_directories("C:/Users/valen/.vcpkg-clion/vcpkg/installed/x64-windows/include")
