@@ -9,8 +9,8 @@ void sobel3x3(
     __global uchar* in,
     __global short* output_x,
     __global short* output_y,
-    unsigned long width,
-    unsigned long height) {
+    ulong width,
+    ulong height) {
    // Get the work-item’s IDs
    int y = get_global_id(0);
    int x = get_global_id(1);
@@ -40,8 +40,8 @@ void phaseAndMagnitude(
     __global const short *in_y,
     __global uchar *phase_out,
     __global ushort *magnitude_out,
-    unsigned long width,
-    unsigned long height) {
+    ulong width,
+    ulong height) {
    // Get the work-item’s IDs
    int y = get_global_id(0);
    int x = get_global_id(1);
@@ -70,8 +70,8 @@ __kernel
 void nonMaxSuppression(
     __global ushort *magnitude,
     __global uchar *phase,
-    unsigned long width,
-    unsigned long height,
+    ulong width,
+    ulong height,
     ushort threshold_lower,
     ushort threshold_upper,
     __global uchar *out) {
