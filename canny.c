@@ -67,19 +67,14 @@ edgeTracing(uint8_t *restrict image, size_t width, size_t height) {
     coord_t *tracing_stack_pointer = tracing_stack;
 
     // LOOP 4.1
-    #pragma omp parallel for
     for (uint16_t y = 0; y < height; y++) {
         // LOOP 4.2
-        #pragma omp parallel for
         for (uint16_t x = 0; x < width; x++) {
             // Collect all YES pixels into the stack
             if (image[y * width + x] == 255) {
                 coord_t yes_pixel = {x, y};
-                #pragma omp critical
-                {
-                    *tracing_stack_pointer = yes_pixel;
-                    tracing_stack_pointer++;  // increments by sizeof(coord_t)
-                }
+                *tracing_stack_pointer = yes_pixel;
+                tracing_stack_pointer++;  // increments by sizeof(coord_t)
             }
         }
     }
@@ -119,10 +114,8 @@ edgeTracing(uint8_t *restrict image, size_t width, size_t height) {
     // Clear all remaining MAYBE pixels to NO, these were not reachable from
     // any YES pixels
     // LOOP 4.5
-    #pragma omp parallel for
     for (int y = 0; y < height; y++) {
         // LOOP 4.6
-        #pragma omp parallel for simd
         for (int x = 0; x < width; x++) {
             image[y * width + x] = 255 * (image[y * width + x] == 255);
         }
