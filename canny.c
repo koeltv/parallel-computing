@@ -5,6 +5,14 @@
 VERSION 23.0 - Created
 */
 
+#ifdef _WIN32
+    #define OS "Windows"
+    #define NUL "NUL"
+#else
+    #define OS "Unix"
+    #define NUL "/dev/null"
+#endif
+
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -382,6 +390,8 @@ main(int argc, char **argv) {
     char *output_image_path = "";
     uint16_t threshold_lower = 0;
     uint16_t threshold_upper = 0;
+    char *ffmpegCheck = "which ffmpeg > /dev/null 2>&1";
+    char *ffplayCheck = "which ffplay > /dev/null 2>&1";
     switch (mode) {
         case BIG_MODE:
             input_image_path = "hameensilta.pgm";
@@ -406,10 +416,13 @@ main(int argc, char **argv) {
                 benchmarking_iterations, input_image_path);
             break;
         case VIDEO_MODE:
-            if (system("which ffmpeg > /dev/null 2>&1") ||
-                system("which ffplay > /dev/null 2>&1")) {
-                printf(
-                    "Video mode is disabled because ffmpeg is not found\n");
+            if (strcmp(OS, "Windows") == 0) {
+                ffmpegCheck = "powershell.exe -Command gcm ffmpeg -ErrorAction SilentlyContinue > NUL";
+                ffplayCheck = "powershell.exe -Command gcm ffplay -ErrorAction SilentlyContinue > NUL";
+            }
+
+            if (system(ffmpegCheck) || system(ffplayCheck)) {
+                printf("Video mode is disabled because ffmpeg is not found\n");
                 return -1;
             }
             benchmarking_iterations = 0;
@@ -450,16 +463,16 @@ main(int argc, char **argv) {
         snprintf(
             pipein_cmd, 1024,
             "ffmpeg -i %s -f image2pipe -vcodec rawvideo -an -s %zux%zu "
-            "-pix_fmt gray - 2> /dev/null",
-            input_image_path, width, height);
-        FILE *pipein = popen(pipein_cmd, "r");
+            "-pix_fmt gray - 2> %s",
+            input_image_path, width, height, NUL);
+        FILE *pipein = popen(pipein_cmd, "rb");
         char pipeout_cmd[1024];
         snprintf(
             pipeout_cmd, 1024,
             "ffplay -f rawvideo -pixel_format gray -video_size %zux%zu "
-            "-an - 2> /dev/null",
-            width, height);
-        FILE *pipeout = popen(pipeout_cmd, "w");
+            "-an - 2> %s",
+            width, height, NUL);
+        FILE *pipeout = popen(pipeout_cmd, "wb");
         double runtimes[4];
         while (1) {
             count = fread(frame, 1, height * width, pipein);
