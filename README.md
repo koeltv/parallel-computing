@@ -7,7 +7,7 @@ The purpose of this program is to do edge detection using the [canny edge detect
 
 The project is split on multiple branch, each adding further optimizations:
 - [master](https://github.com/koeltv/parallel-computing/tree/master) original, no modifications
-- [generic_optimizations](https://github.com/koeltv/parallel-computing/tree/generic_optimizations) some optimizations, no threads
+- [generic_optimizations](https://github.com/koeltv/parallel-computing/tree/generic-optimizations) some optimizations, no threads
 - [openmp](https://github.com/koeltv/parallel-computing/tree/openmp) parallelization with OpenMP
 - [opencl](https://github.com/koeltv/parallel-computing/tree/opencl) usage of specialized hardware with OpenCL
 - [opencl-with-optimizations](https://github.com/koeltv/parallel-computing/tree/opencl-with-optimizations) OpenCL usage with further optimizations
