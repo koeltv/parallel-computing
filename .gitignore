@@ -1,3 +1,7 @@
 /canny
 /cmake-build-debug/
 /.idea
+/.vscode
+*.pgm
+test.sh
+*.exe
